@@ -1,0 +1,227 @@
+import sys
+import os
+import cPickle
+from pandas import DataFrame
+from collections import Counter, defaultdict
+import itertools
+from sys import exit
+from ete3 import SeqGroup
+from ete3 import NCBITaxa
+from Bio.Data import CodonTable
+
+ambiguous_map = { "Y" : ["C", "T"],
+                  "R" : ["A", "G"],
+                  "W" : ["A", "T"],
+                  "S" : ["G", "C"],
+                  "K" : ["T", "G"],
+                  "M" : ["C", "A"],
+                  "D" : ["A", "G", "T"],
+                  "V" : ["A", "C", "G"],
+                  "H" : ["A", "C", "T"],
+                  "B" : ["C", "G", "T"],
+                  "N" : ["A", "G", "C", "T"]
+    }
+
+all_stop_codons = set([stop for stop in CodonTable.unambiguous_dna_by_id[code_id].stop_codons for code_id in CodonTable.unambiguous_dna_by_id])
+all_start_codons = set([start for code_id in CodonTable.unambiguous_dna_by_id for start in CodonTable.unambiguous_dna_by_id[code_id].start_codons])
+
+
+def ambiguity_base(base_counter):
+    base_contribution = defaultdict(dict)
+    ambiguous = set(base_counter.keys()) - set(bases)
+    if ambiguous:
+        for amb in ambiguous:
+            # contribution of Y to C : Cn/(Cn+Tn)
+            nreps = float(sum([base_counter[base] for base in ambiguous_map[amb]]))
+            for base in ambiguous_map[amb]:
+                base_contribution[amb][base] = round(base_counter[base] / nreps, 2)
+        # add contributions and remove ambiguous base
+        for amb in base_contribution:
+            for base in base_contribution[amb]:
+                # total contribution of Y to C : Yn*Cn/(Cn+Tn)
+                base_counter[base] += round(base_counter[amb] * base_contribution[amb][base], 2)
+                del base_counter[amb]
+        return base_contribution
+    else:
+        return False
+            
+            
+def ambiguity_codon(codon_counter, base_contribution):
+    for triplet in codon_counter.keys():
+        # build iterables for product and keep indices
+        combinations = []
+        amb_indices = []
+        for i, base in enumerate(triplet):
+            if base in ambiguous_map:
+                combinations.append(ambiguous_map[base])
+                amb_indices.append(i)
+            else:
+                combinations.append(base)
+        if amb_indices:
+            for combination in itertools.product(*combinations):
+                codon = "".join(combination)
+                # multiply single base contributions, based on indices kept
+                contribution = reduce(lambda x, y: x*y, [base_contribution[triplet[i]][codon[i]] for i in amb_indices])
+                # total contribution of codon is a product of its count
+                codon_counter[codon] += codon_counter[triplet]*contribution
+            del codon_counter[triplet]
+
+def translate(seq):
+    seq = seq.lower().replace('\n', '').replace(' ', '')
+    peptide = ''
+
+    for i in xrange(0, len(seq), 3):
+        codon = seq[i: i+3]
+        amino_acid = codon_table.get(codon, '*')
+        if amino_acid != '*':
+            peptide += amino_acid
+        else:
+            break
+        
+    return peptide
+
+infile = sys.argv[1]
+cdna = SeqGroup(infile)
+outpath = sys.argv[2]
+
+# get all codons
+uni_table = CodonTable.unambiguous_dna_by_id[1]
+all_codons = (uni_table.stop_codons + uni_table.forward_table.keys())
+bases = ['T', 'C', 'A', 'G']
+# sort according to table
+all_codons.sort(key=lambda x: (bases.index(x[0]), bases.index(x[1]), bases.index(x[2])))
+        
+if os.path.exists(outpath + '.spcodons.pkl'):
+    print 'loading from pkl file'
+    spcodons = cPickle.load(open(outpath + '.spcodons.pkl'))
+    spbases = cPickle.load(open(outpath + '.spbases.pkl'))
+    spstarts = cPickle.load(open(outpath + '.spstarts.pkl'))
+    spstops = cPickle.load(open(outpath + '.spstops.pkl'))
+else:
+    spcodons = defaultdict(Counter)
+    spbases = defaultdict(Counter)
+    spstops = defaultdict(Counter)
+    spstarts = defaultdict(Counter)
+
+    for seqid, seq, _ in cdna:
+        taxid = seqid.split(".")[0]
+        # base counts
+        spbases[taxid].update(seq)
+        # start and stop counts
+        start_codon = seq[:3]
+        stop_codon = seq[-3:]
+        spstarts[taxid].update([start_codon])
+        spstops[taxid].update([stop_codon])
+        iseq = seq[3:-3]
+        # iterate over codons
+        for i in xrange(0, len(iseq), 3):
+            codon = iseq[i: i+3]
+            # codon counts
+            spcodons[taxid].update([codon])
+
+    cPickle.dump(spcodons, open(outpath + '.spcodons.pkl', 'wb'), 2)
+    cPickle.dump(spbases, open(outpath + '.spbases.pkl', 'wb'), 2)
+    cPickle.dump(spstarts, open(outpath + '.spstarts.pkl', 'wb'), 2)
+    cPickle.dump(spstops, open(outpath + '.spstops.pkl', 'wb'), 2)
+
+for sp in spbases:
+    base_contribution = ambiguity_base(spbases[sp])
+    # if there is any ambiguous base we remove ambiguous codons after adding contributions
+    if base_contribution:
+        ambiguity_codon(spcodons[sp], base_contribution)
+        ambiguity_codon(spstarts[sp], base_contribution)
+        ambiguity_codon(spstops[sp], base_contribution)
+
+spbasesD = pd.DataFrame.from_dict(spbases, orient='index').fillna(0).loc[tNCBI.get_leaf_names()]
+spcodonsD = pd.DataFrame.from_dict(spcodons, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
+spstartsD = pd.DataFrame.from_dict(spstarts, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
+spstopsD = pd.DataFrame.from_dict(spstops, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
+
+exit()
+        
+for i in xrange(0, 12, 3): print i
+seq_matrix = []
+seqids = []
+
+valid_cols = 0
+spvariants = defaultdict(Counter)
+refaas = []
+
+for infile in infiles:
+#for infile in glob("formatted_MG_seqs.faa.final_tree.fa"):
+    print infile
+    if os.stat(infile).st_size == 0:
+        continue
+
+
+    
+    for name, seq, _ in alg:
+        # Replace trailing gaps with # and * for stop
+        # Count end positions
+        for n, aa in enumerate(seq[::-1]):
+            if aa != "-":
+                break
+            
+        # Seems that is not possible to know where the stop codon would align..
+        # seq = seq[:len(seq)-n] + "*" + "#" * (n-1)
+        # So just keep track of trailing gaps, as compared to internal
+        seq = seq[:len(seq)-n] + "*" * n
+                        
+        aas = [aa for aa in seq.upper()]
+        alg_matrix.append(aas)
+        labels.append(name)
+
+    a = DataFrame(alg_matrix, labels)
+    nsp = float(len(a))
+
+    for col in a:
+        counter = Counter(a[col])
+        refaa, num = counter.most_common(1)[0]
+        frac = num/nsp
+
+        #if refaa != '-':
+            #pass
+            #print col, valid_cols, refaa, frac
+
+        if refaa !=  '-' and frac > 0.66:
+            valid_cols += 1
+            variants = a[a[col] != refaa][col].to_dict()
+            refaas.append(refaa)
+            for sp, var in variants.iteritems():
+                sp = sp.split(".")[0]
+                spvariants[sp].update([(refaa, var)])
+    
+        #if valid_cols > 500:
+        #    break
+
+refaacounter = Counter(refaas)
+            
+for sp, varcounter in spvariants.iteritems():
+    try:
+        sp_name = ncbi.translate_to_names([int(sp.split(".")[0])])[0]
+    except ValueError:
+        sp_name = "oxymonad-%s" % sp
+    for varc in varcounter:
+        ratio = varcounter[varc] / float(refaacounter[varc[0]])
+        if ratio > 0.25:
+            print sp, sp_name, "%s\t%s/%s" % ( "->".join(varc), varcounter[varc], refaacounter[varc[0]] )
+    # #print varcounter.most_common(1)[0], varcounter[('W', 'X')]
+    # most_common = varcounter.most_common(1)[0]
+    # ratio = (most_common[1] / float(refaacounter[most_common[0][0]]))
+    # #if varcounter.most_common(1)[0][1] > 10 and "-" not in varcounter.most_common(1)[0][0]:
+    # if ratio > 0.33:# and "-" not in most_common[0]:
+    #     print sp, ncbi.translate_to_names([int(sp.split(".")[0])])[0]
+    #     for varc in varcounter:
+    #         #if varcounter[varc] > 2:#/float(refaacounter[varc[0]]) > 0.2:
+    #         try:
+    #             print "%s\t%s/%s" % ( "->".join(varc), varcounter[varc], refaacounter[varc[0]] )
+    #         except TypeError:
+    #             print "%s\t%s/%s" % ( "%s->None" % varc[0], varcounter[varc], refaacounter[varc[0]] )
+    #     #print sp, varcounter.most_common(5)
+        
+
+    
+# for col in a:
+#     print a[col]
+#     raw_input()
+
