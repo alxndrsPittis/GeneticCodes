@@ -161,10 +161,37 @@ for sp in spbases:
         ambiguity_codon(spstarts[sp], base_contribution)
         ambiguity_codon(spstops[sp], base_contribution)
 
-spbasesD = pd.DataFrame.from_dict(spbases, orient='index').fillna(0).loc[tNCBI.get_leaf_names()]
-spcodonsD = pd.DataFrame.from_dict(spcodons, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
-spstartsD = pd.DataFrame.from_dict(spstarts, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
-spstopsD = pd.DataFrame.from_dict(spstops, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
+# Sorted species names
+taxids = spbases.keys()
+ncbi = NCBITaxa()
+tNCBI = ncbi.get_topology(taxids, intermediate_nodes=True)
+ncbi.annotate_tree(tNCBI)
+names = [node.sci_name for node in tNCBI.traverse(strategy="preorder") if node.name in taxids]
+
+spbasesD = DataFrame.from_dict(spbases, orient='index').fillna(0)
+spbasesD['GC'] = 100*(spbasesD['G'] + spbasesD['C']) / (spbasesD['A'] + spbasesD['C'] + spbasesD['T'] + spbasesD['G'])
+spcodonsD = DataFrame.from_dict(spcodons, orient='index').fillna(0)[all_codons]
+spstartsD = DataFrame.from_dict(spstarts, orient='index').fillna(0)
+spstopsD = DataFrame.from_dict(spstops, orient='index').fillna(0)
+
+stops = list(spstopsD.columns)
+stops.sort(key=lambda x: (bases.index(x[0]), bases.index(x[1]), bases.index(x[2])))
+starts = list(spstartsD.columns)
+starts.sort(key=lambda x: (bases.index(x[0]), bases.index(x[1]), bases.index(x[2])))
+
+spstopsD = spstopsD[stops]
+spstartsD = spstartsD[starts]
+
+
+spbasesD = DataFrame.from_dict(spbases, orient='index').fillna(0)
+spcodonsD = DataFrame.from_dict(spcodons, orient='index').fillna(0)[all_codons]
+spstartsD = DataFrame.from_dict(spstarts, orient='index').fillna(0)[all_codons]
+spstopsD = DataFrame.from_dict(spstops, orient='index').fillna(0)[all_codons]
+
+# spbasesD = DataFrame.from_dict(spbases, orient='index').fillna(0).loc[tNCBI.get_leaf_names()]
+# spcodonsD = DataFrame.from_dict(spcodons, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
+# spstartsD = DataFrame.from_dict(spstarts, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
+# spstopsD = DataFrame.from_dict(spstops, orient='index').fillna(0).loc[tNCBI.get_leaf_names(),all_codons]
 
 
         
